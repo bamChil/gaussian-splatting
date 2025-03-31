@@ -9,6 +9,7 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
+import numpy as np
 import torch
 from scene import Scene
 import os
@@ -36,11 +37,20 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         rendering = render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)["render"]
+        output_T = render(view, gaussians, pipeline, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)["output_T"]
         gt = view.original_image[0:3, :, :]
 
         if args.train_test_exp:
             rendering = rendering[..., rendering.shape[-1] // 2:]
             gt = gt[..., gt.shape[-1] // 2:]
+
+        output_np = output_T.cpu().numpy()
+        # save as .txt
+        np.savetxt(
+            os.path.join(render_path, '{0:05d}'.format(idx) + ".txt"),
+            output_np,
+            fmt="%.6f"
+        )
 
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
