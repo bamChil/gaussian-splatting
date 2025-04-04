@@ -395,8 +395,8 @@ __device__ void computeCov3D(int idx, const glm::vec3 scale, float mod, const gl
 // Backward pass of the preprocessing steps, except
 // for the covariance computation and inversion
 // (those are handled by a previous kernel call)
-template<int C>
 __global__ void preprocessCUDA(
+	const int num_channel,
 	int P, int D, int M,
 	const float3* means,
 	const int* radii,
@@ -448,10 +448,13 @@ __global__ void preprocessCUDA(
 		computeCov3D(idx, scales[idx], scale_modifier, rotations[idx], dL_dcov3D, dL_dscale, dL_drot);
 }
 
+extern __shared__ float dynamic_shared_mem[];
 // Backward version of the rendering procedure.
-template <uint32_t C>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
+	float* __restrict__ accum_rec,
+	float* __restrict__ last_color,
+	const int num_channel,
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
 	int W, int H,
@@ -491,7 +494,7 @@ renderCUDA(
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
-	__shared__ float collected_colors[C * BLOCK_SIZE];
+	float* collected_colors = dynamic_shared_mem;
 	__shared__ float collected_depths[BLOCK_SIZE];
 
 
@@ -505,20 +508,16 @@ renderCUDA(
 	uint32_t contributor = toDo;
 	const int last_contributor = inside ? n_contrib[pix_id] : 0;
 
-	float accum_rec[C] = { 0 };
-	float dL_dpixel[C];
+	
 	float dL_invdepth;
 	float accum_invdepth_rec = 0;
 	if (inside)
 	{
-		for (int i = 0; i < C; i++)
-			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
 		if(dL_invdepths)
 		dL_invdepth = dL_invdepths[pix_id];
 	}
 
 	float last_alpha = 0;
-	float last_color[C] = { 0 };
 	float last_invdepth = 0;
 
 
@@ -540,8 +539,8 @@ renderCUDA(
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
-			for (int i = 0; i < C; i++)
-				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
+			for (int i = 0; i < num_channel; i++)
+				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * num_channel + i];
 
 			if(dL_invdepths)
 			collected_depths[block.thread_rank()] = depths[coll_id];
@@ -578,19 +577,19 @@ renderCUDA(
 			// pair).
 			float dL_dalpha = 0.0f;
 			const int global_id = collected_id[j];
-			for (int ch = 0; ch < C; ch++)
+			for (int ch = 0; ch < num_channel; ch++)
 			{
 				const float c = collected_colors[ch * BLOCK_SIZE + j];
 				// Update last color (to be used in the next iteration)
-				accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
-				last_color[ch] = c;
+				accum_rec[ch * H * W + pix_id] = last_alpha * last_color[ch * H * W + pix_id] + (1.f - last_alpha) * accum_rec[ch * H * W + pix_id];
+				last_color[ch * H * W + pix_id] = c;
 
-				const float dL_dchannel = dL_dpixel[ch];
-				dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
+				const float dL_dchannel = dL_dpixels[ch * H * W + pix_id];
+				dL_dalpha += (c - accum_rec[ch * H * W + pix_id]) * dL_dchannel;
 				// Update the gradients w.r.t. color of the Gaussian. 
 				// Atomic, since this pixel is just one of potentially
 				// many that were affected by this Gaussian.
-				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
+				atomicAdd(&(dL_dcolors[global_id * num_channel + ch]), dchannel_dcolor * dL_dchannel);
 			}
 			// Propagate gradients from inverse depth to alphaas and
 			// per Gaussian inverse depths
@@ -610,8 +609,8 @@ renderCUDA(
 			// Account for fact that alpha also influences how much of
 			// the background color is added if nothing left to blend
 			float bg_dot_dpixel = 0;
-			for (int i = 0; i < C; i++)
-				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
+			for (int i = 0; i < num_channel; i++)
+				bg_dot_dpixel += bg_color[i] * dL_dpixels[i * H * W + pix_id];
 			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
 
 
@@ -638,6 +637,7 @@ renderCUDA(
 }
 
 void BACKWARD::preprocess(
+	const int num_channel,
 	int P, int D, int M,
 	const float3* means3D,
 	const int* radii,
@@ -690,7 +690,8 @@ void BACKWARD::preprocess(
 	// Propagate gradients for remaining steps: finish 3D mean gradients,
 	// propagate color gradients to SH (if desireD), propagate 3D covariance
 	// matrix gradients to scale and rotation.
-	preprocessCUDA<NUM_CHANNELS> << < (P + 255) / 256, 256 >> > (
+	preprocessCUDA << < (P + 255) / 256, 256 >> > (
+		num_channel,
 		P, D, M,
 		(float3*)means3D,
 		radii,
@@ -712,6 +713,8 @@ void BACKWARD::preprocess(
 }
 
 void BACKWARD::render(
+	const int P,
+	const int num_channel,
 	const dim3 grid, const dim3 block,
 	const uint2* ranges,
 	const uint32_t* point_list,
@@ -731,7 +734,21 @@ void BACKWARD::render(
 	float* dL_dcolors,
 	float* dL_dinvdepths)
 {
-	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
+	// we need malloc memory dynamicly
+	float* accum_rec;
+	cudaMalloc(&accum_rec, W * H * num_channel * sizeof(float));
+	cudaMemset(accum_rec, 0.0, num_channel * sizeof(float));
+
+	float* last_color;
+	cudaMalloc(&last_color, W * H * num_channel * sizeof(float));
+	cudaMemset(last_color, 0.0, num_channel * sizeof(float));
+
+	size_t shared_mem_size = num_channel * BLOCK_SIZE * sizeof(float);
+
+	renderCUDA << <grid, block, shared_mem_size>> >(
+		accum_rec,
+		last_color,
+		num_channel,
 		ranges,
 		point_list,
 		W, H,
@@ -750,4 +767,6 @@ void BACKWARD::render(
 		dL_dcolors,
 		dL_dinvdepths
 		);
+	cudaFree(accum_rec);
+	cudaFree(last_color);
 }

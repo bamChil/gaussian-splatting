@@ -29,6 +29,7 @@ namespace CudaRasterizer
 			bool* present);
 
 		static int forward(
+			const int num_channel,
 			std::function<char* (size_t)> geometryBuffer,
 			std::function<char* (size_t)> binningBuffer,
 			std::function<char* (size_t)> imageBuffer,
@@ -56,6 +57,7 @@ namespace CudaRasterizer
 			bool debug = false);
 
 		static void backward(
+			const int num_channel,
 			const int P, int D, int M, int R,
 			const float* background,
 			const int width, int height,

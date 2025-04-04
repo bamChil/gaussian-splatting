@@ -40,7 +40,7 @@ namespace CudaRasterizer
 		uint32_t* point_offsets;
 		uint32_t* tiles_touched;
 
-		static GeometryState fromChunk(char*& chunk, size_t P);
+		static GeometryState fromChunk(char*& chunk, size_t P, int num_channel=3);
 	};
 
 	struct ImageState
@@ -49,7 +49,7 @@ namespace CudaRasterizer
 		uint32_t* n_contrib;
 		float* accum_alpha;
 
-		static ImageState fromChunk(char*& chunk, size_t N);
+		static ImageState fromChunk(char*& chunk, size_t N, int num_channel=3);
 	};
 
 	struct BinningState
@@ -61,14 +61,14 @@ namespace CudaRasterizer
 		uint32_t* point_list;
 		char* list_sorting_space;
 
-		static BinningState fromChunk(char*& chunk, size_t P);
+		static BinningState fromChunk(char*& chunk, size_t P, int num_channel=3);
 	};
 
 	template<typename T> 
-	size_t required(size_t P)
+	size_t required(size_t P, int num_channel)
 	{
 		char* size = nullptr;
-		T::fromChunk(size, P);
+		T::fromChunk(size, P, num_channel);
 		return ((size_t)size) + 128;
 	}
 };

@@ -21,7 +21,9 @@
 namespace FORWARD
 {
 	// Perform initial steps for each Gaussian prior to rasterization.
-	void preprocess(int P, int D, int M,
+	void preprocess(
+		const int num_channel,
+		int P, int D, int M,
 		const float* orig_points,
 		const glm::vec3* scales,
 		const float scale_modifier,
@@ -50,6 +52,7 @@ namespace FORWARD
 
 	// Main rasterization method.
 	void render(
+		const int num_channel,
 		const dim3 grid, dim3 block,
 		const uint2* ranges,
 		const uint32_t* point_list,

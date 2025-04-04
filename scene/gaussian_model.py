@@ -47,10 +47,11 @@ class GaussianModel:
         self.rotation_activation = torch.nn.functional.normalize
 
 
-    def __init__(self, sh_degree, optimizer_type="default"):
+    def __init__(self, sh_degree, num_channel, optimizer_type="default"):
         self.active_sh_degree = 0
         self.optimizer_type = optimizer_type
         self.max_sh_degree = sh_degree  
+        self.num_channel = num_channel
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
@@ -115,7 +116,10 @@ class GaussianModel:
     def get_features(self):
         features_dc = self._features_dc
         features_rest = self._features_rest
-        return torch.cat((features_dc, features_rest), dim=1)
+        if self.max_sh_degree:
+            return torch.cat((features_dc, features_rest), dim=1)
+        else:
+            return features_dc
     
     @property
     def get_features_dc(self):
@@ -150,9 +154,17 @@ class GaussianModel:
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
-        features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
-        features[:, :3, 0 ] = fused_color
-        features[:, 3:, 1:] = 0.0
+
+        # to test the function of using any channel of color
+        if self.num_channel != 3:
+            repeat_times = self.num_channel // 3 + 1
+            fused_color= fused_color.repeat(1, repeat_times)[:, :self.num_channel]  # (N, self.num_channel)
+        # to test the function of using any channel of color
+            
+        features = torch.zeros((fused_color.shape[0], self.num_channel, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        features[:, :self.num_channel, 0 ] = fused_color
+        # we only use sh_dc to compute colors
+        # features[:, self.num_channel:, 1:] = 0.0
 
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
 
@@ -165,7 +177,8 @@ class GaussianModel:
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
-        self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
+        # we only use sh_dc to compute colors
+        # self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))

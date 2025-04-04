@@ -21,6 +21,8 @@
 namespace BACKWARD
 {
 	void render(
+		const int P,
+		const int num_channel,
 		const dim3 grid, dim3 block,
 		const uint2* ranges,
 		const uint32_t* point_list,
@@ -41,6 +43,7 @@ namespace BACKWARD
 		float* dL_dinvdepths);
 
 	void preprocess(
+		const int num_channel,
 		int P, int D, int M,
 		const float3* means,
 		const int* radii,

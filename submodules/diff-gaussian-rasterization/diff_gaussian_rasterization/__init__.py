@@ -58,6 +58,7 @@ class _RasterizeGaussians(torch.autograd.Function):
 
         # Restructure arguments the way that the C++ lib expects them
         args = (
+            raster_settings.image_channel,
             raster_settings.bg, 
             means3D,
             colors_precomp,
@@ -98,7 +99,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, opacities, geomBuffer, binningBuffer, imgBuffer = ctx.saved_tensors
 
         # Restructure args as C++ method expects them
-        args = (raster_settings.bg,
+        args = (raster_settings.image_channel,
+                raster_settings.bg,
                 means3D, 
                 radii, 
                 colors_precomp, 
@@ -128,7 +130,7 @@ class _RasterizeGaussians(torch.autograd.Function):
 
         # let sh_dgree be zero, then grad_sh=grad_colors_precomp / C0
         # C0*sh=rgb => dL_drgb=dL_d(C0*sh) =>  dL_dsh=dL_drgb/C0
-        if(grad_colors_precomp):
+        if(grad_colors_precomp.sum() != 0):
             C0 = 0.28209479177387814
             grad_sh = grad_colors_precomp / C0
 
@@ -147,6 +149,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         return grads
 
 class GaussianRasterizationSettings(NamedTuple):
+    image_channel: int
     image_height: int
     image_width: int 
     tanfovx : float

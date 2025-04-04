@@ -148,8 +148,9 @@ __device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 r
 }
 
 // Perform initial steps for each Gaussian prior to rasterization.
-template<int C>
-__global__ void preprocessCUDA(int P, int D, int M,
+__global__ void preprocessCUDA(
+	const int num_channel,
+	int P, int D, int M,
 	const float* orig_points,
 	const glm::vec3* scales,
 	const float scale_modifier,
@@ -246,13 +247,15 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// If colors have been precomputed, use them, otherwise convert
 	// spherical harmonics coefficients to RGB color.
-	if (colors_precomp == nullptr)
-	{
-		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
-		rgb[idx * C + 0] = result.x;
-		rgb[idx * C + 1] = result.y;
-		rgb[idx * C + 2] = result.z;
-	}
+
+	// we use python to compute color
+	// if (colors_precomp == nullptr)
+	// {
+	// 	glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
+	// 	rgb[idx * C + 0] = result.x;
+	// 	rgb[idx * C + 1] = result.y;
+	// 	rgb[idx * C + 2] = result.z;
+	// }
 
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
@@ -271,9 +274,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
-template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
+	float* __restrict__ C,
+	const int num_channel,
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
 	int W, int H,
@@ -316,7 +320,9 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
-	float C[CHANNELS] = { 0 };
+
+	// we need malloc memory dynamicly
+	// float C[CHANNELS] = { 0 };
 
 	float expected_invdepth = 0.0f;
 
@@ -369,8 +375,8 @@ renderCUDA(
 			}
 
 			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+			for (int ch = 0; ch < num_channel; ch++)
+				C[ch * H * W + pix_id] += features[collected_id[j] * num_channel + ch] * alpha * T;
 
 			if(invdepth)
 			expected_invdepth += (1 / depths[collected_id[j]]) * alpha * T;
@@ -394,8 +400,8 @@ renderCUDA(
 	{
 		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < CHANNELS; ch++)
-			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+		for (int ch = 0; ch < num_channel; ch++)
+			out_color[ch * H * W + pix_id] = C[ch * H * W + pix_id] + T * bg_color[ch];
 
 		if (invdepth)
 		invdepth[pix_id] = expected_invdepth;// 1. / (expected_depth + T * 1e3);
@@ -403,6 +409,7 @@ renderCUDA(
 }
 
 void FORWARD::render(
+	const int num_channel,
 	const dim3 grid, dim3 block,
 	const uint2* ranges,
 	const uint32_t* point_list,
@@ -418,7 +425,13 @@ void FORWARD::render(
 	float* depth,
 	float* output_T)
 {
-	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
+	float* C;
+	cudaMalloc(&C, W * H * num_channel * sizeof(float));
+	cudaMemset(C, 0.0, W * H * num_channel * sizeof(float));
+
+	renderCUDA << <grid, block >> > (
+		C,
+		num_channel,
 		ranges,
 		point_list,
 		W, H,
@@ -432,9 +445,13 @@ void FORWARD::render(
 		depths, 
 		depth,
 		output_T);
+	cudaFree(C);
+	
 }
 
-void FORWARD::preprocess(int P, int D, int M,
+void FORWARD::preprocess(
+	const int num_channel,
+	int P, int D, int M,
 	const float* means3D,
 	const glm::vec3* scales,
 	const float scale_modifier,
@@ -461,7 +478,8 @@ void FORWARD::preprocess(int P, int D, int M,
 	bool prefiltered,
 	bool antialiasing)
 {
-	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
+	preprocessCUDA << <(P + 255) / 256, 256 >> > (
+		num_channel,
 		P, D, M,
 		means3D,
 		scales,
